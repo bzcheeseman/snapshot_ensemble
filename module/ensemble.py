@@ -65,9 +65,10 @@ class SnapshotEnsemble(object):
     def _ensemble_vote(votes: List[Variable]) -> Variable:
 
         outcome = torch.stack(votes, dim=0)  # stack it up
-        outcome = np.mean(outcome.cpu().data.numpy(), axis=0)  # compute mean along the right axis
+        outcome = torch.mean(outcome, dim=0)  # compute mean along the right axis
+#         outcome = np.mean(outcome.cpu().data.numpy(), axis=0)  # compute mean along the right axis
 
-        outcome = Variable(torch.from_numpy(outcome).float())  # bring us back to pytorch
+#         outcome = Variable(torch.from_numpy(outcome).float())  # bring us back to pytorch
 
         return outcome
 
