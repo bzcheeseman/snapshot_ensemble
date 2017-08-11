@@ -110,7 +110,8 @@ from module import SnapshotEnsemble
 
 ensemble = SnapshotEnsemble(net, criterion, restart_lr=0.1, epochs=num_epochs, batch_size=16,
                             num_snapshots=6, train_dataset=trainset, test_dataset=testset)
-ensemble.train(print_steps=2500)
+
+ensemble.train(closure=ensemble.default_closure, print_steps=2500)
 
 
 def check(output, target):

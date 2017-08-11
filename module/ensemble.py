@@ -29,7 +29,7 @@ class SnapshotEnsemble(object):
                  train_dataset: Dataset,  # The dataset to use for training
                  test_dataset: Dataset=None,  # The dataset to use for validation/testing
                  use_cuda: bool=torch.cuda.is_available(),  # Whether or not to use CUDA
-                 has_hidden_states: bool=False  # If the network has hidden states. See the note about net if it does
+                 gpu: int=0
                  ) -> None:
 
         self.net = net
@@ -47,11 +47,7 @@ class SnapshotEnsemble(object):
         self.ToM = np.floor(self.T/self.M)
 
         self.use_cuda = use_cuda
-        self.has_hidden_states = has_hidden_states
-
-        if self.has_hidden_states:
-            assert hasattr(self.net, "init_hidden")
-            assert hasattr(self.net, "reset_hidden")
+        self.gpu = gpu
 
         if self.use_cuda:
             self.net = self.net.cuda()
@@ -66,42 +62,39 @@ class SnapshotEnsemble(object):
 
         outcome = torch.stack(votes, dim=0)  # stack it up
         outcome = torch.mean(outcome, dim=0)  # compute mean along the right axis
-#         outcome = np.mean(outcome.cpu().data.numpy(), axis=0)  # compute mean along the right axis
-
-#         outcome = Variable(torch.from_numpy(outcome).float())  # bring us back to pytorch
 
         return outcome
 
-    def train(self, print_steps: int=1000) -> None:
+    @staticmethod
+    def default_closure(datum, net, crit, cuda=True, gpu=0):
+        input, target = datum
+        input = Variable(input).cuda(gpu, async=True) if cuda else Variable(input)
+        target = Variable(target).cuda(gpu, async=True) if cuda else Variable(target)
+
+        output = net(input)
+        loss = crit(output, target)
+        loss.backward()
+        return loss
+
+    def train(self,
+              closure: Callable=default_closure,
+              # Signature matches:
+              # closure(Tuple[FloatTensor...], Module, Module, bool, int) -> Variable
+              print_steps: int=1000
+              ) -> None:
 
         step_counter = 0
         snapshot_counter = 1
         running_loss = 0.0
         for epoch in range(self.epochs):
             for j, data in enumerate(self.data_loader):
-                input, target = data
-                input = Variable(input).cuda() if self.use_cuda else Variable(input)
-                target = Variable(target).cuda() if self.use_cuda else Variable(target)
 
                 opt = optim.SGD(self.net.parameters(), lr=self._a_t(step_counter))  # function starts at zero
                 opt.zero_grad()
 
-                output = None
-                model_hidden = None
-                if self.has_hidden_states:
-                    model_hidden = self.net.init_hidden()
-                    model_hidden = model_hidden.cuda() if self.use_cuda else model_hidden
-                    output, model_hidden = self.net(input, model_hidden)
-                else:
-                    output = self.net(input)
-
-                loss = self.criterion(output, target)
-                loss.backward()
+                loss = closure(data, self.net, self.criterion, self.use_cuda, self.gpu)
                 running_loss += loss.data[0]
                 opt.step()
-
-                if self.has_hidden_states:
-                    self.net.reset_hidden(model_hidden)  # reset the model's hidden data
 
                 if step_counter == self.ToM * snapshot_counter:
                     print("================== Saved Snapshot %d ==================" % snapshot_counter)
