@@ -1,10 +1,10 @@
-# snapshot-ensemble
+# snapshot_ensemble
 
 Implementation of the paper [here](https://arxiv.org/pdf/1704.00109.pdf)
 
 ## How to use
 In order to use this project, simply add the package to your project and then
-```
+```python
 from snapshot_ensemble import SnapshotEnsemble
 
 <awesome pytorch NN code here>
