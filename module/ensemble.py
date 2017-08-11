@@ -15,7 +15,7 @@ from torch.utils.data import Dataset, DataLoader
 
 import multiprocessing as mp
 import numpy as np
-from typing import List, Callable
+from typing import List, Callable, Tuple
 
 
 # See https://arxiv.org/pdf/1704.00109.pdf for reference
@@ -60,7 +60,11 @@ class SnapshotEnsemble(object):
         return self.a0/2. * (np.cos((np.pi*(step_no % self.ToM))/self.ToM) + 1)
 
     @staticmethod
-    def default_closure(datum, net, crit, cuda=True, gpu=0):
+    def default_closure(datum: Tuple,
+                        net: nn.Module,
+                        crit: nn.Module,
+                        cuda: bool=True,
+                        gpu: int=0) -> Variable:
         input, target = datum
         input = Variable(input).cuda(gpu, async=True) if cuda else Variable(input)
         target = Variable(target).cuda(gpu, async=True) if cuda else Variable(target)
@@ -71,18 +75,24 @@ class SnapshotEnsemble(object):
         return loss
 
     @staticmethod
-    def default_forward(input, net):
+    def default_forward(input: Variable,
+                        net: nn.Module) -> Variable:
         return net(input)
 
     def optimize_ensemble_weights(self,
                                   forward: Callable=default_forward,
                                   n_iters: int=1,
-                                  ensemble_size: int=6):
+                                  ensemble_size: int=6) -> None:
+
+        if ensemble_size < self.M:
+            print("Running optimize with ensemble size = {}".format(ensemble_size))
+            print("This limits the ensemble size you can use in validate or test with the optimized weights "
+                  "to be <= {}".format(ensemble_size))
 
         min_loss = 1e6
         for iter in range(n_iters):
-            weights = nn.Parameter(torch.rand(self.M).cuda(self.gpu), requires_grad=True) if self.use_cuda \
-                else nn.Parameter(torch.rand(self.M), requires_grad=True)
+            weights = nn.Parameter(torch.rand(ensemble_size).cuda(self.gpu), requires_grad=True) if self.use_cuda \
+                else nn.Parameter(torch.rand(ensemble_size), requires_grad=True)
             opt = optim.LBFGS([weights], lr=0.001)
             crit = nn.CrossEntropyLoss()
 
@@ -95,7 +105,7 @@ class SnapshotEnsemble(object):
                 def cl():
                     opt.zero_grad()
                     output = []  # size is (ensemble x output_tensor.size()) <- batch_size = 1
-                    for m in range(1, ensemble_size):  # guaranteed to run at least once
+                    for m in range(1, ensemble_size+1):  # guaranteed to run at least once
                         self.net.load_state_dict(self.snapshots[-m])
                         out = forward(input, self.net)
                         output.append(out)
@@ -115,10 +125,11 @@ class SnapshotEnsemble(object):
         print("Optimal weights: ", self.ensemble_weights.data)
 
     @staticmethod
-    def _ensemble_vote(weights: Variable, votes: List[Variable]) -> Variable:
+    def _ensemble_vote(weights: Variable,
+                       votes: List[Variable]) -> Variable:
         outcome = torch.cat(votes, 0)  # stack it up
         # compute mean along the right axis
-        outcome = torch.mean(weights[-len(votes):].unsqueeze(1).repeat(1, outcome.size(1)) * outcome, dim=0)
+        outcome = torch.mean(weights.unsqueeze(1).repeat(1, outcome.size(1)) * outcome, dim=0)
 
         return outcome
 
@@ -126,8 +137,7 @@ class SnapshotEnsemble(object):
               closure: Callable=default_closure,
               # Signature matches:
               # closure(Tuple[FloatTensor...], Module, Module, bool, int) -> Variable
-              print_steps: int=1000
-              ) -> None:
+              print_steps: int=1000) -> None:
 
         step_counter = 0
         snapshot_counter = 1
@@ -159,6 +169,7 @@ class SnapshotEnsemble(object):
     def validate(self,
                  forward: Callable=default_forward,
                  ensemble_size: int=None,
+                 use_weights: bool=True,
                  check_correctness: Callable=None) -> float:
 
         if not ensemble_size:
@@ -173,13 +184,17 @@ class SnapshotEnsemble(object):
             target = Variable(target).cuda(self.gpu, async=True) if self.use_cuda else Variable(target)
 
             output = []  # size is (ensemble x output_tensor.size()) <- batch_size = 1
-            for m in range(1, ensemble_size):  # guaranteed to run at least once
+            for m in range(1, ensemble_size+1):  # guaranteed to run at least once
                 self.net.load_state_dict(self.snapshots[-m])
                 out = forward(input, self.net)
                 output.append(out)
 
-            if ensemble_size > 1:
+            if ensemble_size > 1 and use_weights:
                 output = self._ensemble_vote(self.ensemble_weights, output)
+            elif ensemble_size > 1 and not use_weights:
+                ones = Variable(torch.ones(ensemble_size)).cuda(self.gpu) if self.use_cuda \
+                    else Variable(torch.ones(ensemble_size))
+                output = self._ensemble_vote(ones, output)
             else:
                 output = output[0]
 
@@ -194,7 +209,8 @@ class SnapshotEnsemble(object):
              data_loader: DataLoader,
              forward: Callable = default_forward,
              ensemble_size: int=None,
-             check_correctness: Callable=None):
+             use_weights: bool=True,
+             check_correctness: Callable=None) -> float:
         if not ensemble_size:
             ensemble_size = self.M  # could be less than M, in which case we use the last ones
         else:
@@ -207,13 +223,17 @@ class SnapshotEnsemble(object):
             target = Variable(target).cuda(self.gpu, async=True) if self.use_cuda else Variable(target)
 
             output = []  # size is (ensemble x output_tensor.size()) <- batch_size = 1
-            for m in range(1, ensemble_size):  # guaranteed to run at least once
+            for m in range(1, ensemble_size+1):  # guaranteed to run at least once
                 self.net.load_state_dict(self.snapshots[-m])
                 out = forward(input, self.net)
                 output.append(out)
 
-            if ensemble_size > 1:
+            if ensemble_size > 1 and use_weights:
                 output = self._ensemble_vote(self.ensemble_weights, output)
+            elif ensemble_size > 1 and not use_weights:
+                ones = Variable(torch.ones(ensemble_size)).cuda(self.gpu) if self.use_cuda \
+                    else Variable(torch.ones(ensemble_size))
+                output = self._ensemble_vote(ones, output)
             else:
                 output = output[0]
 
