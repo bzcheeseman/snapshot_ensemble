@@ -35,7 +35,8 @@ def check(output, target):
     c = (predicted == target.data).squeeze()
     return bool(c[0])
 
-
+# This step takes a long time - I suggest leaving it for a while and coming back later.
+ensemble.optimize_ensemble_weights(forward=ensemble.default_forward, n_iters=5, ensemble_size=3)
 ensemble.save()
 # ensemble.load(6)
 ensemble.validate(forward=forward, ensemble_size=1, check_correctness=check)

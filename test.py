@@ -121,7 +121,8 @@ def check(output, target):
 
 
 ensemble.load(6)
-# ensemble.optimize_ensemble_weights(forward=ensemble.default_forward, n_iters=1)  # call this to optimize voting
+# call this to optimize voting
+ensemble.optimize_ensemble_weights(forward=ensemble.default_forward, n_iters=1, ensemble_size=3)
 ensemble.save()
 ensemble.validate(forward=ensemble.default_forward, ensemble_size=6, check_correctness=check)
 
