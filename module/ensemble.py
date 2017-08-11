@@ -1,13 +1,14 @@
 #
 # Created by Aman LaChapelle on 7/5/17.
 #
-# snapshot-ensemble
+# snapshot_ensemble
 # Copyright (c) 2017 Aman LaChapelle
-# Full license at snapshot-ensemble/LICENSE.txt
+# Full license at snapshot_ensemble/LICENSE.txt
 #
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as Funct
 from torch.autograd import Variable
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
@@ -48,6 +49,7 @@ class SnapshotEnsemble(object):
 
         self.use_cuda = use_cuda
         self.gpu = gpu
+        self.ensemble_weights = torch.ones(self.M)
 
         if self.use_cuda:
             self.net = self.net.cuda()
@@ -56,14 +58,6 @@ class SnapshotEnsemble(object):
 
     def _a_t(self, step_no: int) -> float:
         return self.a0/2. * (np.cos((np.pi*(step_no % self.ToM))/self.ToM) + 1)
-
-    @staticmethod
-    def _ensemble_vote(votes: List[Variable]) -> Variable:
-
-        outcome = torch.stack(votes, dim=0)  # stack it up
-        outcome = torch.mean(outcome, dim=0)  # compute mean along the right axis
-
-        return outcome
 
     @staticmethod
     def default_closure(datum, net, crit, cuda=True, gpu=0):
@@ -75,6 +69,58 @@ class SnapshotEnsemble(object):
         loss = crit(output, target)
         loss.backward()
         return loss
+
+    @staticmethod
+    def default_forward(input, net):
+        return net(input)
+
+    def optimize_ensemble_weights(self,
+                                  forward: Callable=default_forward,
+                                  n_iters: int=1,
+                                  ensemble_size: int=6):
+
+        min_loss = 1e6
+        for iter in range(n_iters):
+            weights = nn.Parameter(torch.rand(self.M).cuda(self.gpu), requires_grad=True) if self.use_cuda \
+                else nn.Parameter(torch.rand(self.M), requires_grad=True)
+            opt = optim.LBFGS([weights], lr=0.001)
+            crit = nn.CrossEntropyLoss()
+
+            total_loss = 0
+            for j, data in enumerate(self.test_loader):
+                input, target = data
+                input = Variable(input).cuda(self.gpu, async=True) if self.use_cuda else Variable(input)
+                target = Variable(target).cuda(self.gpu, async=True) if self.use_cuda else Variable(target)
+
+                def cl():
+                    opt.zero_grad()
+                    output = []  # size is (ensemble x output_tensor.size()) <- batch_size = 1
+                    for m in range(1, ensemble_size):  # guaranteed to run at least once
+                        self.net.load_state_dict(self.snapshots[-m])
+                        out = forward(input, self.net)
+                        output.append(out)
+                    Funct.softmax(weights)
+                    outcome = self._ensemble_vote(weights, output)
+                    loss = crit(outcome, target)
+                    loss.backward()
+                    return loss
+
+                opt.step(cl)
+                total_loss += cl().data[0]
+
+            if total_loss/len(self.test_loader) < min_loss:
+                min_loss = total_loss
+                self.ensemble_weights = Variable(weights.data)
+
+        print("Optimal weights: ", self.ensemble_weights.data)
+
+    @staticmethod
+    def _ensemble_vote(weights: Variable, votes: List[Variable]) -> Variable:
+        outcome = torch.cat(votes, 0)  # stack it up
+        # compute mean along the right axis
+        outcome = torch.mean(weights[-len(votes):].unsqueeze(1).repeat(1, outcome.size(1)) * outcome, dim=0)
+
+        return outcome
 
     def train(self,
               closure: Callable=default_closure,
@@ -110,7 +156,10 @@ class SnapshotEnsemble(object):
 
                 step_counter += 1
 
-    def validate(self, ensemble_size: int=None, check_correctness: Callable=None) -> float:
+    def validate(self,
+                 forward: Callable=default_forward,
+                 ensemble_size: int=None,
+                 check_correctness: Callable=None) -> float:
 
         if not ensemble_size:
             ensemble_size = self.M  # could be less than M, in which case we use the last ones
@@ -120,40 +169,32 @@ class SnapshotEnsemble(object):
         total_correct = 0
         for j, data in enumerate(self.test_loader):
             input, target = data
-            input = Variable(input).cuda() if self.use_cuda else Variable(input)
-            target = Variable(target).cuda() if self.use_cuda else Variable(target)
+            input = Variable(input).cuda(self.gpu, async=True) if self.use_cuda else Variable(input)
+            target = Variable(target).cuda(self.gpu, async=True) if self.use_cuda else Variable(target)
+
+            output = []  # size is (ensemble x output_tensor.size()) <- batch_size = 1
+            for m in range(1, ensemble_size):  # guaranteed to run at least once
+                self.net.load_state_dict(self.snapshots[-m])
+                out = forward(input, self.net)
+                output.append(out)
 
             if ensemble_size > 1:
-                output = []  # size is (ensemble x output_tensor.size()) <- batch_size = 1
-                for m in range(1, ensemble_size):
-                    self.net.load_state_dict(self.snapshots[-m])
-                    if self.has_hidden_states:
-                        model_hidden = self.net.init_hidden()
-                        out, model_hidden = self.net(input, model_hidden)
-                        self.net.reset_hidden(model_hidden)  # reset the model's hidden data
-                    else:
-                        out = self.net(input)
-
-                    output.append(out)
-
-                output = self._ensemble_vote(output)
+                output = self._ensemble_vote(self.ensemble_weights, output)
             else:
-                self.net.load_state_dict(self.snapshots[-1])
-                if self.has_hidden_states:
-                    model_hidden = self.net.init_hidden()
-                    output, model_hidden = self.net(input, model_hidden)
-                    self.net.reset_hidden(model_hidden)  # reset the model's hidden data
-                else:
-                    output = self.net(input)
+                output = output[0]
 
-            total_correct += 1 if check_correctness(output.cuda(), target.cuda()) else 0
+            total_correct += 1 if check_correctness(output, target) else 0
 
         print("Ensemble Size: %d - Percent Correct: %.2f" %
               (ensemble_size, float(total_correct/len(self.test_loader)) * 100))
 
         return float(total_correct/len(self.test_loader))
 
-    def test(self, data_loader: DataLoader, ensemble_size: int=None, check_correctness: Callable=None):
+    def test(self,
+             data_loader: DataLoader,
+             forward: Callable = default_forward,
+             ensemble_size: int=None,
+             check_correctness: Callable=None):
         if not ensemble_size:
             ensemble_size = self.M  # could be less than M, in which case we use the last ones
         else:
@@ -162,26 +203,21 @@ class SnapshotEnsemble(object):
         total_correct = 0
         for j, data in enumerate(data_loader):
             input, target = data
-            input = Variable(input).cuda() if self.use_cuda else Variable(input)
-            target = Variable(target).cuda() if self.use_cuda else Variable(target)
+            input = Variable(input).cuda(self.gpu, async=True) if self.use_cuda else Variable(input)
+            target = Variable(target).cuda(self.gpu, async=True) if self.use_cuda else Variable(target)
 
             output = []  # size is (ensemble x output_tensor.size()) <- batch_size = 1
-            for m in range(1, ensemble_size):
+            for m in range(1, ensemble_size):  # guaranteed to run at least once
                 self.net.load_state_dict(self.snapshots[-m])
-                if self.has_hidden_states:
-                    model_hidden = self.net.init_hidden()
-                    out, model_hidden = self.net(input, model_hidden)
-                    self.net.reset_hidden(model_hidden)  # reset the model's hidden data
-                else:
-                    out = self.net(input)
+                out = forward(input, self.net)
                 output.append(out)
 
             if ensemble_size > 1:
-                output = self._ensemble_vote(output)
+                output = self._ensemble_vote(self.ensemble_weights, output)
             else:
                 output = output[0]
 
-            total_correct += 1 if check_correctness(output.cuda(), target.cuda()) else 0
+            total_correct += 1 if check_correctness(output, target) else 0
 
         print("Percent Correct: {:.2f}".format(float(total_correct/len(self.test_loader)) * 100))
 
@@ -190,9 +226,11 @@ class SnapshotEnsemble(object):
     def save(self) -> None:
         for i, snapshot in enumerate(self.snapshots):
             torch.save(snapshot, "snapshot_%d.dat" % (i+1))
+        torch.save(self.ensemble_weights, "optimal_weights.dat")
 
     def load(self, num_snapshots: int) -> None:
         for i in range(1, num_snapshots+1):
             snapshot = torch.load("snapshot_%d.dat" % i)
             self.snapshots.append(snapshot)
+        self.ensemble_weights = torch.load("optimal_weights.dat")
 

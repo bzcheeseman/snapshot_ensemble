@@ -1,9 +1,9 @@
 #
 # Created by Aman LaChapelle on 7/5/17.
 #
-# snapshot-ensemble
+# snapshot_ensemble
 # Copyright (c) 2017 Aman LaChapelle
-# Full license at snapshot-ensemble/LICENSE.txt
+# Full license at snapshot_ensemble/LICENSE.txt
 #
 
 # Network is copied directly from pytorch tutorial to see if we can be more accurate with no changes
@@ -64,45 +64,45 @@ import torch.optim as optim
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
 
-for epoch in range(num_epochs):  # loop over the dataset multiple times
-
-    running_loss = 0.0
-    for i, data in enumerate(trainloader, 0):
-        # get the inputs
-        inputs, labels = data
-
-        # wrap them in Variable
-        inputs, labels = Variable(inputs).cuda(), Variable(labels).cuda()
-
-        # zero the parameter gradients
-        optimizer.zero_grad()
-
-        # forward + backward + optimize
-        outputs = net(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-
-        # print statistics
-        running_loss += loss.data[0]
-        if i % 2000 == 1999:    # print every 2000 mini-batches
-            print('[%d, %5d] loss: %.3f' %
-                  (epoch + 1, i + 1, running_loss / 2000))
-            running_loss = 0.0
-
-print('Finished Training')
-
-correct = 0
-total = 0
-for data in testloader:
-    images, labels = data
-    outputs = net(Variable(images).cuda())
-    _, predicted = torch.max(outputs.data, 1)
-    total += labels.size(0)
-    correct += (predicted == labels.cuda()).sum()
-
-print('Accuracy of the network on the 10000 test images: %.2f %%' % (
-    100 * float(correct / total)))
+# for epoch in range(num_epochs):  # loop over the dataset multiple times
+#
+#     running_loss = 0.0
+#     for i, data in enumerate(trainloader, 0):
+#         # get the inputs
+#         inputs, labels = data
+#
+#         # wrap them in Variable
+#         inputs, labels = Variable(inputs).cuda(), Variable(labels).cuda()
+#
+#         # zero the parameter gradients
+#         optimizer.zero_grad()
+#
+#         # forward + backward + optimize
+#         outputs = net(inputs)
+#         loss = criterion(outputs, labels)
+#         loss.backward()
+#         optimizer.step()
+#
+#         # print statistics
+#         running_loss += loss.data[0]
+#         if i % 2000 == 1999:    # print every 2000 mini-batches
+#             print('[%d, %5d] loss: %.3f' %
+#                   (epoch + 1, i + 1, running_loss / 2000))
+#             running_loss = 0.0
+#
+# print('Finished Training')
+#
+# correct = 0
+# total = 0
+# for data in testloader:
+#     images, labels = data
+#     outputs = net(Variable(images).cuda())
+#     _, predicted = torch.max(outputs.data, 1)
+#     total += labels.size(0)
+#     correct += (predicted == labels.cuda()).sum()
+#
+# print('Accuracy of the network on the 10000 test images: %.2f %%' % (
+#     100 * float(correct / total)))
 
 ##################### Starting Modified Code ######################
 
@@ -111,7 +111,7 @@ from module import SnapshotEnsemble
 ensemble = SnapshotEnsemble(net, criterion, restart_lr=0.1, epochs=num_epochs, batch_size=16,
                             num_snapshots=6, train_dataset=trainset, test_dataset=testset)
 
-ensemble.train(closure=ensemble.default_closure, print_steps=2500)
+# ensemble.train(closure=ensemble.default_closure, print_steps=2500)
 
 
 def check(output, target):
@@ -120,9 +120,10 @@ def check(output, target):
     return bool(c[0])
 
 
+ensemble.load(6)
+# ensemble.optimize_ensemble_weights(forward=ensemble.default_forward, n_iters=1)  # call this to optimize voting
 ensemble.save()
-# ensemble.load(6)
-ensemble.validate(ensemble_size=1, check_correctness=check)
+ensemble.validate(forward=ensemble.default_forward, ensemble_size=6, check_correctness=check)
 
 # 50 epochs training, 6 snapshots
 # 6 has accuracy = 63.70%

@@ -22,6 +22,9 @@ def closure(datum, net, crit, cuda=True, gpu=0):  # this is exactly ensemble.def
     loss.backward()
     return loss
 
+def forward(input, net):
+    return net(input)
+
 ensemble.train(closure=closure, print_steps=2500)
 # or
 # ensemble.train()  # defaults are clousre=ensemble.default_closure, and print_steps=1000
@@ -35,7 +38,7 @@ def check(output, target):
 
 ensemble.save()
 # ensemble.load(6)
-ensemble.validate(ensemble_size=1, check_correctness=check)
+ensemble.validate(forward=forward, ensemble_size=1, check_correctness=check)
 
 ```
 It's that simple! All you need to do is define a closure (or use the default provided) and a way to compute test
