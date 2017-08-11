@@ -42,5 +42,5 @@ ensemble.save()
 ensemble.validate(forward=forward, ensemble_size=1, check_correctness=check)
 
 ```
-It's that simple! All you need to do is define a closure (or use the default provided) and a way to compute test
-accuracy.
+It's that simple! All you need to do is define a closure (or use the default provided), a forward call (or use the default 
+provided), and a way to compute test accuracy.
